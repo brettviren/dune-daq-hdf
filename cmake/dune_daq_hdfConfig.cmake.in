@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(HDF5 COMPONENTS C)
+find_dependency(dune_daq_types CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/dune_daq_hdfTargets.cmake")
+check_required_components(dune_daq_hdf)
