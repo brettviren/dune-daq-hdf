@@ -196,7 +196,16 @@ std::vector<std::byte> DaqHdf5File::read_bytes(const std::string& dataset_path) 
     if (!dset.ok()) fail("open dataset " + dataset_path);
     const std::uint64_t n = dataset_bytes(m_file, dataset_path);
     std::vector<std::byte> buf(n);
-    if (n && H5Dread(dset, H5T_NATIVE_UINT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf.data()) < 0) {
+    // Copy the raw byte image with NO type conversion. DAQ fragment datasets are
+    // 1-byte elements but are stored as SIGNED int8 (H5T_STD_I8); reading them
+    // with H5T_NATIVE_UINT8 makes HDF5 CONVERT int8->uint8 and clamp every
+    // negative value (raw bytes 0x80-0xFF) to 0, silently corrupting ~half the
+    // payload. Reading with the dataset's own on-disk datatype is an identity
+    // copy regardless of its signedness, so the bytes land verbatim.
+    Hid ftype(H5Dget_type(dset), H5Tclose);
+    if (!ftype.ok()) fail("get datatype " + dataset_path);
+    if (H5Tget_size(ftype) != 1) fail("dataset element size != 1 byte: " + dataset_path);
+    if (n && H5Dread(dset, ftype, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf.data()) < 0) {
         fail("H5Dread " + dataset_path);
     }
     return buf;

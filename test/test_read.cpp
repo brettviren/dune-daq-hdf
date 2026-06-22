@@ -55,8 +55,12 @@ static void write_dataset(hid_t grp, const std::string& name, const std::vector<
 {
     hsize_t dims[2] = {bytes.size(), 1};
     hid_t space = H5Screate_simple(2, dims, nullptr);
-    hid_t dset = H5Dcreate2(grp, name.c_str(), H5T_STD_U8LE, space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    H5Dwrite(dset, H5T_NATIVE_UINT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, bytes.data());
+    // Real DAQ fragment datasets are stored as SIGNED int8 (H5T_STD_I8); store
+    // synthetic ones the same way so the read path is exercised against the real
+    // storage type. Write with the signed-char native type so the byte image is
+    // stored verbatim (no write-time conversion).
+    hid_t dset = H5Dcreate2(grp, name.c_str(), H5T_STD_I8LE, space, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    H5Dwrite(dset, H5T_NATIVE_SCHAR, H5S_ALL, H5S_ALL, H5P_DEFAULT, bytes.data());
     H5Dclose(dset);
     H5Sclose(space);
 }
@@ -71,6 +75,12 @@ static void make_synthetic(const std::string& path)
     write_dataset(raw, "Detector_Readout_0x000000c9_TDEEth", make_fragment(15, 1, 0xc9, 16));
     H5Gclose(raw);
     H5Gclose(rec);
+    // A root dataset of every byte value 0x00..0xFF (stored signed int8) to guard
+    // the read_bytes int8->uint8 clamping regression: bytes 0x80-0xFF must
+    // survive a read verbatim. At root so it does not affect fragments().
+    std::vector<std::byte> all256(256);
+    for (int i = 0; i < 256; ++i) all256[i] = static_cast<std::byte>(i);
+    write_dataset(f, "byte_roundtrip", all256);
     H5Fclose(f);
 }
 
@@ -110,6 +120,13 @@ static void test_synthetic()
         }
     }
     check(saw_wibeth && saw_tdeeth, "both WIBEth and TDEEth classified");
+
+    // Regression: signed int8 storage must be read back verbatim, not clamped.
+    auto rt = file.read_bytes("/byte_roundtrip");
+    bool rt_ok = rt.size() == 256;
+    for (std::size_t i = 0; rt_ok && i < rt.size(); ++i)
+        if (rt[i] != static_cast<std::byte>(i)) rt_ok = false;
+    check(rt_ok, "read_bytes returns signed-int8 bytes 0x00-0xFF verbatim (no clamping)");
 
     auto hdr = file.record_header(recs[0]);
     check(hdr.has_value(), "record header found");
